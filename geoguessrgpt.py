@@ -81,8 +81,8 @@ def image_to_base64(image):
 
 class GoogleSatelliteAnalysis(BaseModel):
     calculations: str = Field(description="Explain your calculations for each field from the images provided.")
+    total_truck_count: Optional[int] = Field(default=None, description="How many Semi-truck and trailers are visible. Trailers above 50ft are considered semi-truck.")
     is_warehouse: bool = Field(description="From the satellite images, does this location at the center of the image look like a warehouse (with docks). Explanation: Look for rectangular buildings with loading docks, truck parking areas, and large open spaces around the structure.")
-    total_dock_count: Optional[int] = Field(default=None, description="Based on the images approx how many docks are there for this warehouse. Explanation: Count visible loading dock doors or estimate based on the building's perimeter and typical dock spacing.")
     trucks_on_dock: Optional[int] = Field(default=None, description="From the images how many trucks are on the dock. Explanation: Count visible trucks parked at docks. Look for rectangular shapes that are typical of semi-trailers.")
     warehouse_size: Optional[int] = Field(default=None, description="The approx size of the warehouse in sqft (best approximate). Explanation: Estimate the length and width of the building, then multiply to get the square footage. Use known objects like trucks for scale.", example="20000")
     employee_count: Optional[int] = Field(default=None, description="Based on warehouse_size, best estimate. Explanation: Use industry standards (e.g., 1 employee per 1000-1500 sqft for typical warehouses) and adjust based on visible parking lot size and occupancy.")
@@ -152,7 +152,7 @@ async def process_row(session, row, lat, lon):
                 'warehouse_size_sqft': analysis.warehouse_size,
                 'employee_count': analysis.employee_count,
                 'trucks_on_dock': analysis.trucks_on_dock,
-                'total_dock_count': analysis.total_dock_count,
+                'total_truck_count': analysis.total_truck_count,
                 'calculations': analysis.calculations
             }
         else:
@@ -174,7 +174,7 @@ async def process_csv(df, maps_link_column, preview=False):
         for i in range(0, total_rows, ASYNC_BATCH_SIZE):
             batch = df.iloc[i:min(i+ASYNC_BATCH_SIZE, total_rows)].to_dict('records')
             batch_results = await process_batch(batch, session, maps_link_column)
-            current_progress += len(batch_results)
+            current_progress += len(batch_results) / float(total_rows)
             progress_bar.progress(current_progress)
             results.extend([r for r in batch_results if r is not None])
             progress_text.text(f"{len(results)}/{total_rows} rows completed")
@@ -194,7 +194,7 @@ def display_preview(df):
     display_df['image'] = display_df['image'].apply(base64_to_img_tag)
     
     # Convert specific columns to int type, handling NaN values
-    int_columns = ['warehouse_size_sqft', 'employee_count', 'trucks_on_dock', 'total_dock_count']
+    int_columns = ['warehouse_size_sqft', 'employee_count', 'trucks_on_dock', 'total_truck_count']
     for col in int_columns:
         if col in display_df.columns:
             display_df[col] = display_df[col].fillna(0).astype(int)
@@ -244,13 +244,13 @@ def display_results(result_df):
                     # Convert to Excel cell reference
                     cell = xl_rowcol_to_cell(row_num - 1, image_preview_column)
                     
-                    # Insert the resized image
-                    worksheet.insert_image(cell, '', {
-                        'image_data': io.BytesIO(base64.b64decode(new_image_base64)),
-                        'object_position': 1,  # 1 means top left
-                        'x_scale': 1,  # No scaling needed as image is already resized
-                        'y_scale': 1,  # No scaling needed as image is already resized
-                    })
+                    # # Insert the resized image
+                    # worksheet.insert_image(cell, '', {
+                    #     'image_data': io.BytesIO(base64.b64decode(new_image_base64)),
+                    #     'object_position': 1,  # 1 means top left
+                    #     'x_scale': 1,  # No scaling needed as image is already resized
+                    #     'y_scale': 1,  # No scaling needed as image is already resized
+                    # })
             
             # Set row height and column width for the image preview column
             worksheet.set_default_row(200)  # Set row height to 200 pixels
