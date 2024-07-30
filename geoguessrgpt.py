@@ -234,7 +234,7 @@ def display_results(result_df):
                     # Open the image using Pillow
                     with Image.open(image_data) as img:
                         # Resize the image to 200x200
-                        img = img.resize((100, 100))
+                        img = img.resize((200, 200))
                         # Save the resized image to a new BytesIO object
                         buffered = io.BytesIO()
                         img.save(buffered, format="PNG")
