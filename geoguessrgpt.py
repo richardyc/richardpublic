@@ -124,11 +124,12 @@ async def analyze_image(image_base64_zoom19, image_base64_zoom18):
 
     return response
 
-async def process_batch(batch, session, maps_link_column):
+async def process_batch(batch, session, lat_column, lon_column):
     tasks = []
     for row in batch:
-        lat, lon = extract_coordinates(row[maps_link_column])
-        if lat and lon:
+        lat = row[lat_column]
+        lon = row[lon_column]
+        if pd.notna(lat) and pd.notna(lon):
             task = asyncio.create_task(process_row(session, row, lat, lon))
             tasks.append(task)
     results = await asyncio.gather(*tasks)
@@ -147,7 +148,7 @@ async def process_row(session, row, lat, lon):
                 **row,
                 'latitude': lat,
                 'longitude': lon,
-                'image': image_base64_zoom19,
+                'image': image_base64_zoom18,
                 'is_warehouse': analysis.is_warehouse,
                 'warehouse_size_sqft': analysis.warehouse_size,
                 'employee_count': analysis.employee_count,
@@ -162,7 +163,7 @@ async def process_row(session, row, lat, lon):
         st.error(f"Error processing row: {str(e)}")
         return None
 
-async def process_csv(df, maps_link_column, preview=False):
+async def process_csv(df, lat_column, lon_column, preview=False):
     results = []
     total_rows = len(df) if not preview else min(10, len(df))
     progress_bar = st.progress(0)
@@ -173,7 +174,7 @@ async def process_csv(df, maps_link_column, preview=False):
     async with aiohttp.ClientSession() as session:
         for i in range(0, total_rows, ASYNC_BATCH_SIZE):
             batch = df.iloc[i:min(i+ASYNC_BATCH_SIZE, total_rows)].to_dict('records')
-            batch_results = await process_batch(batch, session, maps_link_column)
+            batch_results = await process_batch(batch, session, lat_column, lon_column)
             current_progress += len(batch_results) / float(total_rows)
             progress_bar.progress(current_progress)
             results.extend([r for r in batch_results if r is not None])
@@ -235,23 +236,25 @@ def display_results(result_df):
                     with Image.open(image_data) as img:
                         # Resize the image to 200x200
                         img = img.resize((200, 200))
-                        # Save the resized image to a new BytesIO object
+                        # Convert to RGB mode if it's not already
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        # Save the resized image to a new BytesIO object with compression
                         buffered = io.BytesIO()
-                        img.save(buffered, format="PNG")
+                        img.save(buffered, format="JPEG", quality=85, optimize=True)
                         # Get the new base64 string
                         new_image_base64 = base64.b64encode(buffered.getvalue()).decode()
                     
                     # Convert to Excel cell reference
                     cell = xl_rowcol_to_cell(row_num - 1, image_preview_column)
                     
-                    # # Insert the resized image
-                    # worksheet.insert_image(cell, '', {
-                    #     'image_data': io.BytesIO(base64.b64decode(new_image_base64)),
-                    #     'object_position': 1,  # 1 means top left
-                    #     'x_scale': 1,  # No scaling needed as image is already resized
-                    #     'y_scale': 1,  # No scaling needed as image is already resized
-                    # })
-            
+                    # Insert the compressed image
+                    worksheet.insert_image(cell, '', {
+                        'image_data': io.BytesIO(base64.b64decode(new_image_base64)),
+                        'object_position': 1,  # 1 means top left
+                        'x_scale': 1,  # No scaling needed as image is already resized
+                        'y_scale': 1,  # No scaling needed as image is already resized
+                    })
             # Set row height and column width for the image preview column
             worksheet.set_default_row(200)  # Set row height to 200 pixels
             worksheet.set_column(image_preview_column, image_preview_column, 20)  # Set column width to 20 units
@@ -280,23 +283,43 @@ if password == correct_password:
         st.write("Preview of uploaded data:")
         st.write(df)
         
-        google_maps_columns = [col for col in df.columns if df[col].astype(str).str.contains(r'^https?://.*google.*maps', case=False, regex=True).any()]
+        input_type = st.radio("Select input type:", ["Google Maps Link", "Latitude and Longitude"])
         
-        if not google_maps_columns:
-            st.error("Error: Cannot find a column containing Google Maps links in the uploaded file.")
+        if input_type == "Google Maps Link":
+            google_maps_columns = [col for col in df.columns if df[col].astype(str).str.contains(r'^https?://.*google.*maps', case=False, regex=True).any()]
+            
+            if not google_maps_columns:
+                st.error("Error: Cannot find a column containing Google Maps links in the uploaded file.")
+            else:
+                maps_link_column = st.selectbox("Select the column containing Google Maps links:", google_maps_columns)
+                
+                if st.button("Preview Results"):
+                    with st.spinner('Processing preview...'):
+                        preview_df = asyncio.run(process_csv(df.head(10), maps_link_column, preview=True))
+                    
+                    st.write("Preview of results (first 10 rows):")
+                    display_preview(preview_df)
+                    
+                if st.button("Process Entire Dataset"):
+                    with st.spinner('Processing entire dataset... !!Please do not close this tab!!'):
+                        result_df = asyncio.run(process_csv(df, maps_link_column))
+                    
+                    st.write("Results:")
+                    display_results(result_df)
         else:
-            maps_link_column = st.selectbox("Select the column containing Google Maps links:", google_maps_columns)
+            lat_column = st.selectbox("Select the column containing latitude:", df.columns)
+            lon_column = st.selectbox("Select the column containing longitude:", df.columns)
             
             if st.button("Preview Results"):
                 with st.spinner('Processing preview...'):
-                    preview_df = asyncio.run(process_csv(df.head(10), maps_link_column, preview=True))
+                    preview_df = asyncio.run(process_csv(df.head(10), lat_column, lon_column, preview=True))
                 
                 st.write("Preview of results (first 10 rows):")
                 display_preview(preview_df)
                 
             if st.button("Process Entire Dataset"):
                 with st.spinner('Processing entire dataset... !!Please do not close this tab!!'):
-                    result_df = asyncio.run(process_csv(df, maps_link_column))
+                    result_df = asyncio.run(process_csv(df, lat_column, lon_column))
                 
                 st.write("Results:")
                 display_results(result_df)
