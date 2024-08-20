@@ -2,6 +2,7 @@ import io
 import streamlit as st
 import pandas as pd
 import requests
+import re
 from PIL import Image
 from io import BytesIO
 import base64
@@ -62,7 +63,7 @@ async def get_google_satellite_image(session, lat, lon, api_key, zoom):
     params = {
         'center': f'{lat},{lon}',
         'zoom': zoom,
-        'size': '1024x1024',
+        'size': '640x640',
         'maptype': 'satellite',
         'key': api_key
     }
@@ -70,9 +71,100 @@ async def get_google_satellite_image(session, lat, lon, api_key, zoom):
         if response.status == 200:
             image_data = await response.read()
             image = Image.open(BytesIO(image_data))
+            
+            # Convert the image to RGB mode to ensure compatibility with drawing operations
+            image = image.convert('RGB')
+            
+            # Save the image before drawing
+            image.save("before_drawing.png")
+            print(f"Image size before drawing: {image.size}")
+            
+            from PIL import ImageDraw, ImageFont
+            
+            # Add rulers or measures in feet
+            draw = ImageDraw.Draw(image)
+            font = ImageFont.load_default()
+            
+            # Calculate scale based on zoom level (approximate)
+            if zoom == 19:
+                scale = 450 / 640  # ~450ft for 640 pixels at zoom 19
+            elif zoom == 18:
+                scale = 900 / 640  # ~900ft for 640 pixels at zoom 18
+            # Draw white background for rulers
+            draw.rectangle([(0, 620), (640, 640)], fill="white")  # Horizontal ruler background
+            draw.rectangle([(600, 0), (640, 640)], fill="white")  # Vertical ruler background
+            
+            # Draw horizontal ruler
+            for i in range(int(100 / scale), 630, int(100 / scale)):  # Every 100ft, starting from 100ft
+                # Draw a more visible marker
+                draw.rectangle([(i+3, 0), (i+4, 640)], fill="black")
+                label = f"{round(i * scale / 100) * 100}ft"
+                draw.text((i, 630), label, fill="black", font=font, anchor="ms")
+            
+            # Draw vertical ruler
+            for i in range(int(100 / scale), 630, int(100 / scale)):  # Every 100ft, starting from 100ft
+                # Draw a more visible marker
+                draw.rectangle([(0, i+2), (640, i+3)], fill="black")
+                label = f"{round(i * scale / 100) * 100}ft"
+                draw.text((625, i), label, fill="black", font=font, anchor="rm")
+
+            # Add a text box pointing to the center of map
+            text = "Estimate this building"
+            text_bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            
+            # Calculate position for text box (top-left corner)
+            text_position = (320 - text_width // 2, 280)  # Moved closer to the center
+            
+            # Draw white background for text
+            padding = 2
+            draw.rectangle([
+                (text_position[0] - padding, text_position[1] - padding),
+                (text_position[0] + text_width + padding, text_position[1] + text_height + padding)
+            ], fill="white", outline="black")
+            
+            # Draw text
+            draw.text(text_position, text, fill="black", font=font)
+            
+            # Draw red arrow pointing to the center
+            arrow_start = (320, text_position[1] + text_height + padding + 5)
+            arrow_end = (320, 320)  # Center of the image
+            draw.line([arrow_start, arrow_end], fill="red", width=2)
+            
+            # Draw red arrowhead
+            arrowhead_size = 10
+            draw.polygon([
+                (arrow_end[0], arrow_end[1]),
+                (arrow_end[0] - arrowhead_size, arrow_end[1] - arrowhead_size),
+                (arrow_end[0] + arrowhead_size, arrow_end[1] - arrowhead_size)
+            ], fill="red")
+
+            # Save the image after drawing
+            image.save("after_drawing.png")
+            print(f"Image size after drawing: {image.size}")
             return image
         else:
             raise Exception(f"Error fetching image: {response.status} - {await response.text()}")
+
+# Test the function
+# async def test_get_google_satellite_image():
+#     test_lat, test_lon = 37.7749, -122.4194  # Example coordinates (San Francisco)
+#     test_zoom = 19
+
+#     async with aiohttp.ClientSession() as session:
+#         try:
+#             image = await get_google_satellite_image(session, test_lat, test_lon, google_maps_api_key, test_zoom)
+#             print("Image successfully retrieved and processed.")
+#             # Optionally, you can save the image to verify it visually
+#             image.save("test_satellite_image.png")
+#             print("Image saved as 'test_satellite_image.png'")
+#         except Exception as e:
+#             print(f"Error during test: {e}")
+
+# # Run the test function
+# if __name__ == "__main__":
+#     asyncio.run(test_get_google_satellite_image())
 
 def image_to_base64(image):
     buffered = BytesIO()
@@ -80,26 +172,27 @@ def image_to_base64(image):
     return base64.b64encode(buffered.getvalue()).decode()
 
 class GoogleSatelliteAnalysis(BaseModel):
-    calculations: str = Field(description="Explain your calculations for each field from the images provided.")
-    total_truck_count: Optional[int] = Field(default=None, description="How many Semi-truck and trailers are visible. Trailers above 50ft are considered semi-truck.")
-    is_warehouse: bool = Field(description="From the satellite images, does this location at the center of the image look like a warehouse (with docks). Explanation: Look for rectangular buildings with loading docks, truck parking areas, and large open spaces around the structure.")
-    trucks_on_dock: Optional[int] = Field(default=None, description="From the images how many trucks are on the dock. Explanation: Count visible trucks parked at docks. Look for rectangular shapes that are typical of semi-trailers.")
-    warehouse_size: Optional[int] = Field(default=None, description="The approx size of the warehouse in sqft (best approximate). Explanation: Estimate the length and width of the building, then multiply to get the square footage. Use known objects like trucks for scale.", example="20000")
-    employee_count: Optional[int] = Field(default=None, description="Based on warehouse_size, best estimate. Explanation: Use industry standards (e.g., 1 employee per 1000-1500 sqft for typical warehouses) and adjust based on visible parking lot size and occupancy.")
+    calculations: str = Field(description="Explain your calculations for each field from the images provided, how many ruler unit the warehouse takes up.")
+    is_warehouse: bool = Field(description="From the satellite images, does this building complex look like a warehouse. Explanation: Look for rectangular buildings with loading docks, truck parking areas, and large open spaces around the structure.")
+    warehouse_length: Optional[int] = Field(default=None, description="The approximate length of the warehouse in feet. Explanation: Estimate the longer side of the building. Use known objects like trucks or based on the size of the image for scale.", example=900)
+    warehouse_width: Optional[int] = Field(default=None, description="The approximate width of the warehouse in feet. Explanation: Estimate the shorter side of the building. Use known objects like trucks or based on the size of the image for scale.", example=500)
+    num_loading_docks: Optional[int] = Field(description="How many loading docks are there, if any. Look for loading docks around the warehouse")
+    num_trucks_on_dock: Optional[int] = Field(description="How many trucks are on the loading dock, if any.")
+    warehouse_size_confidence: Optional[int] = Field(default="How confident are you in your estimation? rate it 0-10, e.g. incomplete image, not enough info can contribute to a low score")
 
 async def analyze_image(image_base64_zoom19, image_base64_zoom18):
     response = await client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         response_model=GoogleSatelliteAnalysis,
         messages=[
             {
                 "role": "system",
-                "content": "You are an urban planner and expert statistician."
+                "content": "You are an satellite image engineer and expert statistician."
             },
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Analyze only the building at the center of these Google Maps satellite images. One image contains a google satellite image (~450ft*450ft) and another zoomed out google satellite image (~900ft*900ft). Is this location a warehouse? If so, provide details about its size, estimated employee count, number of trucks on docks, and total dock count. If it's not a warehouse or you're unsure, indicate that in your response. Be strict and accurate with your estimation."},
+                    {"type": "text", "text": "Analyze the entire building complex (anything that is connected to the structure) marked on the satellite image. Is this entire building complex a warehouse? If so, provide details about its size based on the ruler on the image. If it's not a warehouse or you're unsure, indicate that in your response. Be very accurate with your estimation."},
                     {
                         "type": "image_url",
                         "image_url": {
@@ -150,11 +243,12 @@ async def process_row(session, row, lat, lon):
                 'longitude': lon,
                 'image': image_base64_zoom18,
                 'is_warehouse': analysis.is_warehouse,
-                'warehouse_size_sqft': analysis.warehouse_size,
-                'employee_count': analysis.employee_count,
-                'trucks_on_dock': analysis.trucks_on_dock,
-                'total_truck_count': analysis.total_truck_count,
-                'calculations': analysis.calculations
+                'warehouse_length': analysis.warehouse_length,
+                'warehouse_width': analysis.warehouse_width,
+                'num_loading_docks': analysis.num_loading_docks,
+                'num_trucks_on_dock': analysis.num_trucks_on_dock,
+                'calculations': analysis.calculations,
+                'warehouse_size_confidence': analysis.warehouse_size_confidence
             }
         else:
             st.warning(f"Analysis failed for row: {row}")
@@ -195,7 +289,7 @@ def display_preview(df):
     display_df['image'] = display_df['image'].apply(base64_to_img_tag)
     
     # Convert specific columns to int type, handling NaN values
-    int_columns = ['warehouse_size_sqft', 'employee_count', 'trucks_on_dock', 'total_truck_count']
+    int_columns = ['warehouse_width', 'warehouse_length']
     for col in int_columns:
         if col in display_df.columns:
             display_df[col] = display_df[col].fillna(0).astype(int)
@@ -234,8 +328,8 @@ def display_results(result_df):
                     image_data = io.BytesIO(base64.b64decode(image_base64))
                     # Open the image using Pillow
                     with Image.open(image_data) as img:
-                        # Resize the image to 200x200
-                        img = img.resize((200, 200))
+                        # Resize the image to 300x300
+                        img = img.resize((300, 300))
                         # Convert to RGB mode if it's not already
                         if img.mode != 'RGB':
                             img = img.convert('RGB')
@@ -256,9 +350,8 @@ def display_results(result_df):
                         'y_scale': 1,  # No scaling needed as image is already resized
                     })
             # Set row height and column width for the image preview column
-            worksheet.set_default_row(200)  # Set row height to 200 pixels
-            worksheet.set_column(image_preview_column, image_preview_column, 20)  # Set column width to 20 units
-    
+            worksheet.set_default_row(300)  # Set row height to 300 pixels
+            worksheet.set_column(image_preview_column, image_preview_column, 30)  # Set column width to 30 units
     # Offer the Excel file for download
     excel_data = output.getvalue()
     st.download_button(
@@ -293,16 +386,24 @@ if password == correct_password:
             else:
                 maps_link_column = st.selectbox("Select the column containing Google Maps links:", google_maps_columns)
                 
+                def extract_lat_lon(url):
+                    match = re.search(r'!3d([-\d.]+)!4d([-\d.]+)', url)
+                    if match:
+                        return float(match.group(1)), float(match.group(2))
+                    return None, None
+
+                df['latitude'], df['longitude'] = zip(*df[maps_link_column].apply(extract_lat_lon))
+                
                 if st.button("Preview Results"):
                     with st.spinner('Processing preview...'):
-                        preview_df = asyncio.run(process_csv(df.head(10), maps_link_column, preview=True))
+                        preview_df = asyncio.run(process_csv(df.head(10), 'latitude', 'longitude', preview=True))
                     
                     st.write("Preview of results (first 10 rows):")
                     display_preview(preview_df)
                     
                 if st.button("Process Entire Dataset"):
                     with st.spinner('Processing entire dataset... !!Please do not close this tab!!'):
-                        result_df = asyncio.run(process_csv(df, maps_link_column))
+                        result_df = asyncio.run(process_csv(df, 'latitude', 'longitude'))
                     
                     st.write("Results:")
                     display_results(result_df)
