@@ -247,7 +247,7 @@ async def process_row(session, row, lat, lon):
                 'warehouse_width': analysis.warehouse_width,
                 'num_loading_docks': analysis.num_loading_docks,
                 'num_trucks_on_dock': analysis.num_trucks_on_dock,
-                'calculations': analysis.calculations,
+                # 'calculations': analysis.calculations,
                 'warehouse_size_confidence': analysis.warehouse_size_confidence
             }
         else:
